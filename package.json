@@ -1,0 +1,15 @@
+{
+  "name": "kisanai-backend",
+  "version": "1.0.0",
+  "description": "KisanAI Backend API - Vercel Serverless",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "devDependencies": {
+    "vercel": "^37.0.0"
+  }
+}

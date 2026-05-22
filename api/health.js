@@ -5,11 +5,11 @@ module.exports = function handler(req, res) {
   return res.status(200).json({
     status: 'ok',
     message: 'KisanAI Backend chal raha hai! 🌾',
-    ai_provider: 'Google Gemini',
+    ai_provider: 'OpenAI GPT-4o-mini',
     services: {
-      ai_detect: process.env.GEMINI_API_KEY ? '✅ ready' : '❌ GEMINI_API_KEY missing',
-      ai_guide:  process.env.GEMINI_API_KEY ? '✅ ready' : '❌ GEMINI_API_KEY missing',
-      ai_chat:   process.env.GEMINI_API_KEY ? '✅ ready' : '❌ GEMINI_API_KEY missing',
+      ai_detect: process.env.OPENAI_API_KEY ? '✅ ready' : '❌ OPENAI_API_KEY missing',
+      ai_guide:  process.env.OPENAI_API_KEY ? '✅ ready' : '❌ OPENAI_API_KEY missing',
+      ai_chat:   process.env.OPENAI_API_KEY ? '✅ ready' : '❌ OPENAI_API_KEY missing',
       weather:   '✅ ready',
       sellers:   '✅ ready',
     },

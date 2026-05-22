@@ -1,8 +1,9 @@
 // POST /api/chat
 // Body: { messages: [{ role: "user", content: "..." }] }
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent';
-const SYSTEM_PROMPT = `You are KisanAI, an expert AI farming assistant for Indian farmers. You have deep knowledge of Indian crop diseases, farming techniques, government schemes (PM Kisan, Fasal Bima, Kisan Credit Card), fertilizers, organic farming, pest control, soil health, irrigation, and market prices. Always respond in friendly Hinglish (mix of Hindi and English). Keep answers practical, brief (3-5 sentences), and actionable. Use simple language that village farmers can understand. Add relevant emojis. Address farmers respectfully.`;
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent';
+
+const SYSTEM = `You are KisanAI, an expert AI farming assistant for Indian farmers. Deep knowledge of Indian crop diseases, farming techniques, government schemes (PM Kisan, Fasal Bima), fertilizers, organic farming, pest control. Always respond in friendly Hinglish (Hindi + English mix). Keep answers practical, brief (3-5 sentences), actionable. Simple language for village farmers. Add emojis. Be respectful.`;
 
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -19,8 +20,7 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: 'Messages array required' });
   }
 
-  // Convert messages to Gemini format
-  // Gemini requires: role must be 'user' or 'model', and first message must be 'user'
+  // Convert to Gemini format, only user/model roles
   let contents = messages
     .filter(m => m.role && m.content && String(m.content).trim())
     .map(m => ({
@@ -28,47 +28,44 @@ module.exports = async function handler(req, res) {
       parts: [{ text: String(m.content) }],
     }));
 
-  // Gemini requires conversation to START with 'user' role
+  // Must start with user role
   while (contents.length > 0 && contents[0].role === 'model') {
     contents = contents.slice(1);
   }
 
   if (contents.length === 0) {
-    return res.status(400).json({ error: 'No valid user messages found' });
+    return res.status(400).json({ error: 'No valid messages' });
   }
+
+  // Inject system prompt into first user message (no system_instruction needed)
+  contents[0] = {
+    role: 'user',
+    parts: [{ text: `[System: ${SYSTEM}]\n\nUser message: ${contents[0].parts[0].text}` }],
+  };
 
   try {
     const response = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        system_instruction: {
-          parts: [{ text: SYSTEM_PROMPT }],
-        },
         contents,
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 512,
-        },
+        generationConfig: { temperature: 0.7, maxOutputTokens: 512 },
       }),
     });
 
-    if (!response.ok) {
-      const err = await response.text();
-      console.error('Gemini chat error:', err);
-      return res.status(502).json({ error: 'Gemini API error', details: err });
-    }
-
     const data = await response.json();
-    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-    if (!reply) {
-      return res.status(500).json({ error: 'Empty response from Gemini' });
+    if (!response.ok) {
+      console.error('Gemini error:', JSON.stringify(data));
+      return res.status(502).json({ error: 'Gemini error', details: data?.error?.message });
     }
+
+    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    if (!reply) return res.status(500).json({ error: 'Empty response' });
 
     return res.status(200).json({ success: true, reply });
   } catch (err) {
-    console.error('Chat handler error:', err);
+    console.error('Chat error:', err);
     return res.status(500).json({ error: err.message });
   }
 };

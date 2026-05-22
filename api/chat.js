@@ -1,7 +1,9 @@
-// POST /api/guide
-// Body: { crop: "Tamatar" }
+// POST /api/chat
+// Body: { messages: [{ role: "user", content: "..." }] }
 
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+
+const SYSTEM_PROMPT = `You are KisanAI, an expert AI farming assistant for Indian farmers. You have deep knowledge of Indian crop diseases, farming techniques, government schemes (PM Kisan, Fasal Bima, Kisan Credit Card), fertilizers, organic farming, pest control, soil health, irrigation, and market prices. Always respond in friendly Hinglish (mix of Hindi and English). Keep answers practical, brief (3-5 sentences), and actionable. Use simple language that village farmers can understand. Add relevant emojis. Address farmers respectfully.`;
 
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -10,11 +12,31 @@ module.exports = async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { crop } = req.body || {};
-  if (!crop) return res.status(400).json({ error: 'Crop name required' });
-
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY missing' });
+
+  const { messages } = req.body || {};
+  if (!messages || !Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: 'Messages array required' });
+  }
+
+  // Convert messages to Gemini format
+  // Gemini requires: role must be 'user' or 'model', and first message must be 'user'
+  let contents = messages
+    .filter(m => m.role && m.content && String(m.content).trim())
+    .map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: String(m.content) }],
+    }));
+
+  // Gemini requires conversation to START with 'user' role
+  while (contents.length > 0 && contents[0].role === 'model') {
+    contents = contents.slice(1);
+  }
+
+  if (contents.length === 0) {
+    return res.status(400).json({ error: 'No valid user messages found' });
+  }
 
   try {
     const response = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
@@ -22,51 +44,32 @@ module.exports = async function handler(req, res) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         system_instruction: {
-          parts: [{ text: 'You are an expert Indian agricultural scientist. Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation outside the JSON array.' }],
+          parts: [{ text: SYSTEM_PROMPT }],
         },
-        contents: [{
-          parts: [{
-            text: `Create a complete farming roadmap for ${crop} crop in India.
-Return ONLY a valid JSON array with exactly 6 steps. No markdown, no extra text.
-Each step object must have exactly:
-{
-  "step": 1,
-  "title": "Hindi title (English)",
-  "description": "2-3 practical Hinglish sentences about this stage",
-  "duration": "e.g. Day 1-10",
-  "tips": "1 important tip in Hinglish",
-  "status": "done"
-}
-Steps 1-3 status="done", step 4 status="active", steps 5-6 status="upcoming".`,
-          }],
-        }],
+        contents,
         generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 1500,
+          temperature: 0.7,
+          maxOutputTokens: 512,
         },
       }),
     });
 
     if (!response.ok) {
       const err = await response.text();
+      console.error('Gemini chat error:', err);
       return res.status(502).json({ error: 'Gemini API error', details: err });
     }
 
     const data = await response.json();
-    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-    let steps;
-    try {
-      const cleaned = rawText.replace(/```json|```/g, '').trim();
-      steps = JSON.parse(cleaned);
-      if (!Array.isArray(steps)) throw new Error('Not array');
-    } catch {
-      return res.status(500).json({ error: 'Parse error', raw: rawText });
+    if (!reply) {
+      return res.status(500).json({ error: 'Empty response from Gemini' });
     }
 
-    return res.status(200).json({ success: true, crop, data: steps });
+    return res.status(200).json({ success: true, reply });
   } catch (err) {
-    console.error('Guide error:', err);
+    console.error('Chat handler error:', err);
     return res.status(500).json({ error: err.message });
   }
 };

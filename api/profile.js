@@ -101,6 +101,51 @@ async function sendLoginAlert(email, name) {
   } catch (err) { console.error('Login alert error:', err.message); }
 }
 
+async function sendAdminNotification(newUserName, newUserEmail, state) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) return;
+  const now = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+  try {
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: 'KisanAI <onboarding@resend.dev>',
+        to: 'ritikyadavg0123@gmail.com',
+        subject: '🌾 Naya Kisan Join Hua! — KisanAI',
+        html: `<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#F4F6F0;font-family:Arial,sans-serif;">
+<div style="max-width:500px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+  <div style="background:#27500A;padding:20px 24px;text-align:center;">
+    <div style="font-size:36px;">🎉</div>
+    <h2 style="color:#fff;margin:8px 0 0;font-size:18px;">Naya User Join Hua!</h2>
+    <p style="color:#C0DD97;font-size:12px;margin:4px 0 0;">KisanAI Admin Notification</p>
+  </div>
+  <div style="padding:24px;">
+    <div style="background:#EAF3DE;border-radius:12px;padding:16px;margin-bottom:16px;">
+      <h3 style="color:#27500A;font-size:14px;margin:0 0 12px;">👤 User Details</h3>
+      <table style="width:100%;border-collapse:collapse;">
+        <tr><td style="color:#3B6D11;font-size:13px;padding:6px 0;border-bottom:0.5px solid rgba(59,109,17,0.1);">Naam</td><td style="color:#27500A;font-size:13px;font-weight:700;text-align:right;">${newUserName}</td></tr>
+        <tr><td style="color:#3B6D11;font-size:13px;padding:6px 0;border-bottom:0.5px solid rgba(59,109,17,0.1);">Email</td><td style="color:#27500A;font-size:13px;font-weight:700;text-align:right;">${newUserEmail||'Phone user'}</td></tr>
+        <tr><td style="color:#3B6D11;font-size:13px;padding:6px 0;border-bottom:0.5px solid rgba(59,109,17,0.1);">State</td><td style="color:#27500A;font-size:13px;font-weight:700;text-align:right;">${state||'Unknown'}</td></tr>
+        <tr><td style="color:#3B6D11;font-size:13px;padding:6px 0;">Register Time</td><td style="color:#27500A;font-size:13px;font-weight:700;text-align:right;">${now} IST</td></tr>
+      </table>
+    </div>
+    <div style="background:#f0f9f0;border-radius:10px;padding:12px;text-align:center;border:1px dashed #3B6D11;">
+      <p style="color:#27500A;font-size:13px;margin:0;font-weight:600;">🌾 KisanAI grow kar raha hai!</p>
+      <p style="color:#3B6D11;font-size:12px;margin:4px 0 0;">Badhai ho Ritik Ji!</p>
+    </div>
+  </div>
+  <div style="background:#f5f7f2;padding:12px 24px;text-align:center;">
+    <p style="color:#aaa;font-size:10px;margin:0;">KisanAI Admin Panel · ritikyadavg0123@gmail.com</p>
+  </div>
+</div></body></html>`,
+      }),
+    });
+    console.log('Admin notification sent!');
+  } catch (err) { console.error('Admin notification error:', err.message); }
+}
+
+
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -125,6 +170,7 @@ module.exports = async function handler(req, res) {
     await fetch(`${url}/rest/v1/kisan_users`, { method:'POST', headers:{...headers,'Prefer':'return=minimal'}, body:JSON.stringify({farmer_id:farmerId,name:name||'Kisan Ji',state:state||'Uttar Pradesh',farm_size_acres:farm_size_acres||1,onboarding_done:true}) });
     const email = identifier.includes('@') ? identifier : null;
     sendWelcomeEmail(email, name||'Kisan Ji', state||'India');
+    sendAdminNotification(name||'Kisan Ji', email, state||'India');
     return res.status(200).json({ success:true, farmer_id:farmerId, name:name||'Kisan Ji', message:'Account ban gaya! Welcome email bheja ja raha hai 📧' });
   }
 

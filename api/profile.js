@@ -11,7 +11,7 @@ async function sendWelcomeEmail(email, name, state) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey || !email || !email.includes('@')) return;
   try {
-    await fetch('https://api.resend.com/emails', {
+    const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -62,8 +62,15 @@ async function sendWelcomeEmail(email, name, state) {
 </div></body></html>`,
       }),
     });
-    console.log('Welcome email sent to:', email);
-  } catch (err) { console.error('Email error:', err.message); }
+    // ✅ Response log karo debugging ke liye
+    const result = await response.json();
+    console.log('✅ Welcome email sent to:', email, '| ID:', result.id || 'N/A');
+    if (result.statusCode && result.statusCode >= 400) {
+      console.error('❌ Resend error:', JSON.stringify(result));
+    }
+  } catch (err) { 
+    console.error('❌ Email error:', err.message); 
+  }
 }
 
 async function sendLoginAlert(email, name) {
@@ -141,7 +148,7 @@ async function sendAdminNotification(newUserName, newUserEmail, state) {
 </div></body></html>`,
       }),
     });
-    console.log('Admin notification sent!');
+    console.log('✅ Admin notification sent!');
   } catch (err) { console.error('Admin notification error:', err.message); }
 }
 
@@ -150,6 +157,12 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  
+  // ✅ FIX 1: Cache headers — 304 status fix
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const url = process.env.SUPABASE_URL;
@@ -169,9 +182,12 @@ module.exports = async function handler(req, res) {
     await fetch(`${url}/rest/v1/kisan_auth`, { method:'POST', headers:{...headers,'Prefer':'return=minimal'}, body:JSON.stringify({farmer_id:farmerId,identifier,identifier_type,password_hash:pwHash}) });
     await fetch(`${url}/rest/v1/kisan_users`, { method:'POST', headers:{...headers,'Prefer':'return=minimal'}, body:JSON.stringify({farmer_id:farmerId,name:name||'Kisan Ji',state:state||'Uttar Pradesh',farm_size_acres:farm_size_acres||1,onboarding_done:true}) });
     const email = identifier.includes('@') ? identifier : null;
-    sendWelcomeEmail(email, name||'Kisan Ji', state||'India');
-    sendAdminNotification(name||'Kisan Ji', email, state||'India');
-    return res.status(200).json({ success:true, farmer_id:farmerId, name:name||'Kisan Ji', message:'Account ban gaya! Welcome email bheja ja raha hai 📧' });
+    
+    // ✅ FIX 2: await lagao — Vercel function kill hone se pehle email bhejo
+    await sendWelcomeEmail(email, name||'Kisan Ji', state||'India');
+    await sendAdminNotification(name||'Kisan Ji', email, state||'India');
+    
+    return res.status(200).json({ success:true, farmer_id:farmerId, name:name||'Kisan Ji', message:'Account ban gaya! Welcome email bheja gaya 📧' });
   }
 
   if (type === 'login' && req.method === 'POST') {
@@ -185,7 +201,10 @@ module.exports = async function handler(req, res) {
     const profR = await fetch(`${url}/rest/v1/kisan_users?farmer_id=eq.${farmerId}&limit=1`, { headers });
     const profData = await profR.json();
     const profile = Array.isArray(profData)&&profData.length>0 ? profData[0] : { name:'Kisan Ji', state:'UP' };
-    if (identifier.includes('@')) sendLoginAlert(identifier, profile.name);
+    
+    // ✅ FIX 3: Login alert bhi await karo
+    if (identifier.includes('@')) await sendLoginAlert(identifier, profile.name);
+    
     return res.status(200).json({ success:true, farmer_id:farmerId, name:profile.name, state:profile.state, message:'Login successful!' });
   }
 

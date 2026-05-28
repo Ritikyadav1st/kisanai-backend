@@ -1,116 +1,263 @@
-// GET /api/community?type=posts&state=UP
-// POST /api/community?type=post  { farmer_id, farmer_name, state, content, image_data }
-// POST /api/community?type=like  { farmer_id, post_id }
-// GET /api/community?type=comments&post_id=xxx
-// POST /api/community?type=comment  { farmer_id, farmer_name, post_id, content }
+// community.js — Posts + Likes + Comments + Kisan University Videos
+// Vercel Serverless API
 
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_ANON_KEY;
   if (!url || !key) return res.status(500).json({ error: 'Supabase not configured' });
-  const headers = { 'apikey': key, 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' };
 
-  const { type, post_id } = req.query;
+  const headers = {
+    'apikey': key,
+    'Authorization': `Bearer ${key}`,
+    'Content-Type': 'application/json',
+    'Prefer': 'return=representation',
+  };
 
-  // GET POSTS
+  const { type } = req.query;
+
+  // ─── COMMUNITY POSTS ────────────────────────────────────────
+
   if (type === 'posts' && req.method === 'GET') {
     const { farmer_id } = req.query;
-    try {
-      const r = await fetch(`${url}/rest/v1/community_posts?order=created_at.desc&limit=20`, { headers });
-      const posts = await r.json();
-      if (!Array.isArray(posts)) return res.status(200).json({ success: true, data: [] });
+    const r = await fetch(`${url}/rest/v1/community_posts?order=created_at.desc&limit=20`, { headers });
+    const posts = await r.json();
+    if (!Array.isArray(posts)) return res.status(200).json({ success: true, data: [] });
 
-      // Get likes for current user
-      let myLikes = [];
-      if (farmer_id) {
-        const lR = await fetch(`${url}/rest/v1/community_likes?farmer_id=eq.${farmer_id}`, { headers });
-        myLikes = await lR.json();
-        if (!Array.isArray(myLikes)) myLikes = [];
-      }
-
-      const likedPostIds = new Set(myLikes.map(l => l.post_id));
-      const postsWithLike = posts.map(p => ({ ...p, liked_by_me: likedPostIds.has(p.id) }));
-      return res.status(200).json({ success: true, data: postsWithLike });
-    } catch (e) { return res.status(500).json({ error: e.message }); }
+    // Likes count + liked by me
+    const enriched = await Promise.all(posts.map(async p => {
+      const lr = await fetch(`${url}/rest/v1/community_likes?post_id=eq.${p.id}`, { headers });
+      const likes = await lr.json();
+      const cr = await fetch(`${url}/rest/v1/community_comments?post_id=eq.${p.id}&select=count`, {
+        headers: { ...headers, 'Prefer': 'count=exact' }
+      });
+      const commentsCount = cr.headers.get('content-range')?.split('/')[1] || 0;
+      return {
+        ...p,
+        likes_count: Array.isArray(likes) ? likes.length : 0,
+        liked_by_me: Array.isArray(likes) && farmer_id ? likes.some(l => l.farmer_id === farmer_id) : false,
+        comments_count: parseInt(commentsCount) || 0,
+      };
+    }));
+    return res.status(200).json({ success: true, data: enriched });
   }
 
-  // CREATE POST
   if (type === 'post' && req.method === 'POST') {
-    const { farmer_id, farmer_name, state, content, image_data } = req.body || {};
-    if (!farmer_id || !content) return res.status(400).json({ error: 'farmer_id and content required' });
+    const { farmer_id, farmer_name, content } = req.body || {};
+    if (!farmer_id || !content) return res.status(400).json({ error: 'farmer_id aur content zaroori hai' });
     const r = await fetch(`${url}/rest/v1/community_posts`, {
-      method: 'POST', headers: { ...headers, 'Prefer': 'return=representation' },
-      body: JSON.stringify({ farmer_id, farmer_name: farmer_name || 'Kisan Ji', state, content, image_data: image_data || null }),
+      method: 'POST', headers,
+      body: JSON.stringify({ farmer_id, farmer_name: farmer_name || 'Kisan Ji', content, created_at: new Date().toISOString() }),
     });
     const data = await r.json();
     return res.status(200).json({ success: true, data: data[0] || data });
   }
 
-  // LIKE/UNLIKE
   if (type === 'like' && req.method === 'POST') {
-    const { farmer_id, post_id: pid } = req.body || {};
-    if (!farmer_id || !pid) return res.status(400).json({ error: 'farmer_id and post_id required' });
-
-    // Check existing
-    const chR = await fetch(`${url}/rest/v1/community_likes?farmer_id=eq.${farmer_id}&post_id=eq.${pid}&limit=1`, { headers });
-    const existing = await chR.json();
-
+    const { farmer_id, post_id } = req.body || {};
+    if (!farmer_id || !post_id) return res.status(400).json({ error: 'farmer_id aur post_id zaroori hai' });
+    const check = await fetch(`${url}/rest/v1/community_likes?farmer_id=eq.${farmer_id}&post_id=eq.${post_id}`, { headers });
+    const existing = await check.json();
     if (Array.isArray(existing) && existing.length > 0) {
-      // Unlike
-      await fetch(`${url}/rest/v1/community_likes?farmer_id=eq.${farmer_id}&post_id=eq.${pid}`, { method: 'DELETE', headers });
-      await fetch(`${url}/rest/v1/community_posts?id=eq.${pid}`, {
-        method: 'PATCH', headers: { ...headers, 'Prefer': 'return=minimal' },
-        body: JSON.stringify({ likes_count: Math.max(0, (existing[0]?.likes_count || 1) - 1) }),
-      });
-      return res.status(200).json({ success: true, liked: false });
-    } else {
-      // Like
-      await fetch(`${url}/rest/v1/community_likes`, {
-        method: 'POST', headers: { ...headers, 'Prefer': 'return=minimal' },
-        body: JSON.stringify({ farmer_id, post_id: pid }),
-      });
-      // Get current likes count
-      const pR = await fetch(`${url}/rest/v1/community_posts?id=eq.${pid}&select=likes_count`, { headers });
-      const pData = await pR.json();
-      const current = (pData[0]?.likes_count || 0) + 1;
-      await fetch(`${url}/rest/v1/community_posts?id=eq.${pid}`, {
-        method: 'PATCH', headers: { ...headers, 'Prefer': 'return=minimal' },
-        body: JSON.stringify({ likes_count: current }),
-      });
-      return res.status(200).json({ success: true, liked: true });
+      await fetch(`${url}/rest/v1/community_likes?farmer_id=eq.${farmer_id}&post_id=eq.${post_id}`, { method: 'DELETE', headers });
+      return res.status(200).json({ success: true, action: 'unliked' });
     }
+    await fetch(`${url}/rest/v1/community_likes`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ farmer_id, post_id, created_at: new Date().toISOString() }),
+    });
+    return res.status(200).json({ success: true, action: 'liked' });
   }
 
-  // GET COMMENTS
   if (type === 'comments' && req.method === 'GET') {
-    if (!post_id) return res.status(400).json({ error: 'post_id required' });
+    const { post_id } = req.query;
+    if (!post_id) return res.status(400).json({ error: 'post_id zaroori hai' });
     const r = await fetch(`${url}/rest/v1/community_comments?post_id=eq.${post_id}&order=created_at.asc`, { headers });
     const data = await r.json();
     return res.status(200).json({ success: true, data: Array.isArray(data) ? data : [] });
   }
 
-  // ADD COMMENT
   if (type === 'comment' && req.method === 'POST') {
-    const { farmer_id, farmer_name, post_id: pid, content } = req.body || {};
-    if (!farmer_id || !pid || !content) return res.status(400).json({ error: 'farmer_id, post_id, content required' });
-    await fetch(`${url}/rest/v1/community_comments`, {
-      method: 'POST', headers: { ...headers, 'Prefer': 'return=minimal' },
-      body: JSON.stringify({ farmer_id, farmer_name: farmer_name || 'Kisan Ji', post_id: pid, content }),
+    const { farmer_id, farmer_name, post_id, content } = req.body || {};
+    if (!farmer_id || !post_id || !content) return res.status(400).json({ error: 'Fields missing' });
+    const r = await fetch(`${url}/rest/v1/community_comments`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ farmer_id, farmer_name: farmer_name || 'Kisan Ji', post_id, content, created_at: new Date().toISOString() }),
     });
-    // Update comment count
-    const pR = await fetch(`${url}/rest/v1/community_posts?id=eq.${pid}&select=comments_count`, { headers });
-    const pData = await pR.json();
-    const current = (pData[0]?.comments_count || 0) + 1;
-    await fetch(`${url}/rest/v1/community_posts?id=eq.${pid}`, {
-      method: 'PATCH', headers, body: JSON.stringify({ comments_count: current }),
+    const data = await r.json();
+    return res.status(200).json({ success: true, data: data[0] || data });
+  }
+
+  // ─── KISAN UNIVERSITY VIDEOS ─────────────────────────────────
+
+  // GET /api/community?type=videos — sab videos fetch karo
+  if (type === 'videos' && req.method === 'GET') {
+    const { category, search } = req.query;
+    let endpoint = `${url}/rest/v1/kisan_videos?order=created_at.desc&limit=50`;
+    if (category && category !== 'all') endpoint += `&category=eq.${category}`;
+
+    const r = await fetch(endpoint, { headers });
+    const data = await r.json();
+
+    if (!Array.isArray(data)) {
+      // Agar table nahi hai toh sample data return karo
+      return res.status(200).json({ success: true, data: getSampleVideos(), source: 'sample' });
+    }
+
+    let videos = data;
+
+    // Search filter
+    if (search) {
+      const q = search.toLowerCase();
+      videos = videos.filter(v =>
+        v.title?.toLowerCase().includes(q) ||
+        v.description?.toLowerCase().includes(q) ||
+        v.crop?.toLowerCase().includes(q)
+      );
+    }
+
+    return res.status(200).json({ success: true, data: videos.length > 0 ? videos : getSampleVideos(), source: videos.length > 0 ? 'db' : 'sample' });
+  }
+
+  // POST /api/community?type=add_video — naya video add karo (admin)
+  if (type === 'add_video' && req.method === 'POST') {
+    const { title, description, youtube_id, youtube_url, category, crop, duration, thumbnail, uploaded_by } = req.body || {};
+    if (!title || (!youtube_id && !youtube_url)) {
+      return res.status(400).json({ error: 'title aur youtube_id zaroori hai' });
+    }
+
+    // YouTube ID extract karo URL se
+    let ytId = youtube_id;
+    if (!ytId && youtube_url) {
+      const match = youtube_url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([^&\n?#]+)/);
+      ytId = match ? match[1] : null;
+    }
+    if (!ytId) return res.status(400).json({ error: 'Valid YouTube URL nahi hai' });
+
+    const videoData = {
+      title: title.trim(),
+      description: description || '',
+      youtube_id: ytId,
+      category: category || 'general',
+      crop: crop || 'all',
+      duration: duration || '< 5 min',
+      thumbnail: thumbnail || `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`,
+      uploaded_by: uploaded_by || 'KisanAI',
+      views: 0,
+      likes: 0,
+      created_at: new Date().toISOString(),
+    };
+
+    const r = await fetch(`${url}/rest/v1/kisan_videos`, {
+      method: 'POST', headers,
+      body: JSON.stringify(videoData),
     });
+    const data = await r.json();
+    return res.status(200).json({ success: true, data: data[0] || data, message: 'Video add ho gaya!' });
+  }
+
+  // POST /api/community?type=video_view — view count badhao
+  if (type === 'video_view' && req.method === 'POST') {
+    const { video_id } = req.body || {};
+    if (!video_id) return res.status(400).json({ error: 'video_id zaroori hai' });
+
+    // Views increment karo (RPC ya manual fetch+update)
+    const getR = await fetch(`${url}/rest/v1/kisan_videos?id=eq.${video_id}`, { headers });
+    const videos = await getR.json();
+    if (Array.isArray(videos) && videos.length > 0) {
+      await fetch(`${url}/rest/v1/kisan_videos?id=eq.${video_id}`, {
+        method: 'PATCH', headers,
+        body: JSON.stringify({ views: (videos[0].views || 0) + 1 }),
+      });
+    }
     return res.status(200).json({ success: true });
   }
 
-  return res.status(400).json({ error: 'Invalid type' });
+  // GET /api/community?type=video_categories — categories list
+  if (type === 'video_categories' && req.method === 'GET') {
+    return res.status(200).json({
+      success: true,
+      data: [
+        { id: 'all', label: 'Sab', emoji: '📚' },
+        { id: 'disease', label: 'Rog Ilaaj', emoji: '🔬' },
+        { id: 'fertilizer', label: 'Khad', emoji: '🌱' },
+        { id: 'irrigation', label: 'Sinchai', emoji: '💧' },
+        { id: 'harvest', label: 'Katai', emoji: '🌾' },
+        { id: 'organic', label: 'Organic', emoji: '🍃' },
+        { id: 'government', label: 'Sarkari', emoji: '🏛️' },
+        { id: 'market', label: 'Mandi', emoji: '📊' },
+        { id: 'weather', label: 'Mausam', emoji: '🌤️' },
+        { id: 'seeds', label: 'Beej', emoji: '🫘' },
+      ]
+    });
+  }
+
+  return res.status(405).json({ error: 'Invalid type ya method' });
 };
+
+// ─── Sample Videos (jab DB empty ho) ─────────────────────────
+function getSampleVideos() {
+  return [
+    {
+      id: 1,
+      title: 'Tamatar mein pani kitna dein — Complete Guide',
+      description: 'Tamatar ki fasal mein sahi irrigation technique — drip vs flood',
+      youtube_id: 'dQw4w9WgXcQ',
+      category: 'irrigation',
+      crop: 'Tamatar',
+      duration: '4:32',
+      thumbnail: 'https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+      uploaded_by: 'KisanAI',
+      views: 1240,
+      likes: 89,
+      created_at: new Date().toISOString(),
+    },
+    {
+      id: 2,
+      title: 'Gehun mein DAP kab aur kitna daalein',
+      description: 'Rabi season mein gehun ke liye fertilizer schedule',
+      youtube_id: 'dQw4w9WgXcQ',
+      category: 'fertilizer',
+      crop: 'Gehun',
+      duration: '3:15',
+      thumbnail: 'https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+      uploaded_by: 'KisanAI',
+      views: 890,
+      likes: 67,
+      created_at: new Date().toISOString(),
+    },
+    {
+      id: 3,
+      title: 'PM Kisan Samman Nidhi — Form kaise bharein',
+      description: 'Step by step guide — PM Kisan registration aur payment status',
+      youtube_id: 'dQw4w9WgXcQ',
+      category: 'government',
+      crop: 'all',
+      duration: '6:45',
+      thumbnail: 'https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+      uploaded_by: 'KisanAI',
+      views: 3400,
+      likes: 210,
+      created_at: new Date().toISOString(),
+    },
+    {
+      id: 4,
+      title: 'Neem spray ghar pe kaise banayein — Organic',
+      description: 'Zero cost organic pesticide — sirf neem patti se',
+      youtube_id: 'dQw4w9WgXcQ',
+      category: 'organic',
+      crop: 'all',
+      duration: '2:50',
+      thumbnail: 'https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+      uploaded_by: 'KisanAI',
+      views: 2100,
+      likes: 156,
+      created_at: new Date().toISOString(),
+    },
+  ];
+}

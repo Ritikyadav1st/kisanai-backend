@@ -42,6 +42,34 @@ module.exports = async function handler(req, res) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY missing' });
 
+  // ── Voice Transcription (Whisper) ────────────────────────────
+  const { type } = req.query;
+  if (type === 'transcribe') {
+    const { audio_base64, language } = req.body || {};
+    if (!audio_base64) return res.status(400).json({ error: 'audio_base64 required' });
+    try {
+      // Convert base64 to Buffer
+      const audioBuffer = Buffer.from(audio_base64, 'base64');
+      // Create FormData for Whisper API
+      const { FormData, Blob } = await import('formdata-node');
+      const form = new FormData();
+      form.set('file', new Blob([audioBuffer], {type:'audio/m4a'}), 'audio.m4a');
+      form.set('model', 'whisper-1');
+      form.set('language', language || 'hi');
+      form.set('response_format', 'text');
+      const whisperRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+        body: form,
+      });
+      const text = await whisperRes.text();
+      if (!whisperRes.ok) return res.status(502).json({ error: text });
+      return res.status(200).json({ success: true, text: text.trim() });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
   // Feature check
   const enabled = await isEnabled();
   if (!enabled) return res.status(403).json({ error: 'Chat feature is disabled', disabled: true });

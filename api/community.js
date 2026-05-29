@@ -1,4 +1,4 @@
-// community.js — Posts + Likes + Comments + Kisan University Videos
+// community.js — Posts + Likes + Comments + Kisan University (YouTube API)
 // Vercel Serverless API
 
 module.exports = async function handler(req, res) {
@@ -29,7 +29,6 @@ module.exports = async function handler(req, res) {
     const posts = await r.json();
     if (!Array.isArray(posts)) return res.status(200).json({ success: true, data: [] });
 
-    // Likes count + liked by me
     const enriched = await Promise.all(posts.map(async p => {
       const lr = await fetch(`${url}/rest/v1/community_likes?post_id=eq.${p.id}`, { headers });
       const likes = await lr.json();
@@ -93,106 +92,107 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ success: true, data: data[0] || data });
   }
 
-  // ─── KISAN UNIVERSITY VIDEOS ─────────────────────────────────
+  // ─── KISAN UNIVERSITY — YOUTUBE API ──────────────────────────
 
-  // GET /api/community?type=videos — sab videos fetch karo
+  // GET /api/community?type=videos&category=disease&search=tamatar
   if (type === 'videos' && req.method === 'GET') {
-    const { category, search } = req.query;
-    let endpoint = `${url}/rest/v1/kisan_videos?order=created_at.desc&limit=50`;
-    if (category && category !== 'all') endpoint += `&category=eq.${category}`;
+    const { category = 'all', search = '' } = req.query;
+    const ytKey = process.env.YOUTUBE_API_KEY;
 
-    const r = await fetch(endpoint, { headers });
-    const data = await r.json();
-
-    if (!Array.isArray(data)) {
-      // Agar table nahi hai toh sample data return karo
+    if (!ytKey) {
       return res.status(200).json({ success: true, data: getSampleVideos(), source: 'sample' });
     }
 
-    let videos = data;
-
-    // Search filter
-    if (search) {
-      const q = search.toLowerCase();
-      videos = videos.filter(v =>
-        v.title?.toLowerCase().includes(q) ||
-        v.description?.toLowerCase().includes(q) ||
-        v.crop?.toLowerCase().includes(q)
-      );
-    }
-
-    return res.status(200).json({ success: true, data: videos.length > 0 ? videos : getSampleVideos(), source: videos.length > 0 ? 'db' : 'sample' });
-  }
-
-  // POST /api/community?type=add_video — naya video add karo (admin)
-  if (type === 'add_video' && req.method === 'POST') {
-    const { title, description, youtube_id, youtube_url, category, crop, duration, thumbnail, uploaded_by } = req.body || {};
-    if (!title || (!youtube_id && !youtube_url)) {
-      return res.status(400).json({ error: 'title aur youtube_id zaroori hai' });
-    }
-
-    // YouTube ID extract karo URL se
-    let ytId = youtube_id;
-    if (!ytId && youtube_url) {
-      const match = youtube_url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([^&\n?#]+)/);
-      ytId = match ? match[1] : null;
-    }
-    if (!ytId) return res.status(400).json({ error: 'Valid YouTube URL nahi hai' });
-
-    const videoData = {
-      title: title.trim(),
-      description: description || '',
-      youtube_id: ytId,
-      category: category || 'general',
-      crop: crop || 'all',
-      duration: duration || '< 5 min',
-      thumbnail: thumbnail || `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`,
-      uploaded_by: uploaded_by || 'KisanAI',
-      views: 0,
-      likes: 0,
-      created_at: new Date().toISOString(),
+    // Category → Hindi search query mapping
+    const CATEGORY_QUERIES = {
+      all:        'kheti kisani tips hindi kisan',
+      disease:    'fasal mein rog keet prabandhan hindi',
+      fertilizer: 'khet mein khad upyog DAP urea hindi',
+      irrigation: 'khet sinchai pani prabandhan drip hindi',
+      harvest:    'fasal katai threshing post harvest hindi',
+      organic:    'jaivik kheti organic farming hindi',
+      government: 'PM kisan yojana sarkari scheme kisan hindi',
+      market:     'mandi bhav fasal bechna kisan market',
+      seeds:      'beej upchar variety selection kisan hindi',
+      weather:    'mausam aur kheti kharif rabi fasal',
     };
 
-    const r = await fetch(`${url}/rest/v1/kisan_videos`, {
-      method: 'POST', headers,
-      body: JSON.stringify(videoData),
-    });
-    const data = await r.json();
-    return res.status(200).json({ success: true, data: data[0] || data, message: 'Video add ho gaya!' });
+    const baseQuery = CATEGORY_QUERIES[category] || CATEGORY_QUERIES.all;
+    const finalQuery = search.trim()
+      ? `${search} kheti kisan hindi`
+      : baseQuery;
+
+    try {
+      const ytUrl = `https://www.googleapis.com/youtube/v3/search?` +
+        `part=snippet` +
+        `&q=${encodeURIComponent(finalQuery)}` +
+        `&type=video` +
+        `&maxResults=20` +
+        `&relevanceLanguage=hi` +
+        `&regionCode=IN` +
+        `&videoDuration=medium` +
+        `&key=${ytKey}`;
+
+      const ytRes = await fetch(ytUrl);
+      const ytData = await ytRes.json();
+
+      if (ytData.error) {
+        console.error('YouTube API Error:', ytData.error.message);
+        return res.status(200).json({ success: true, data: getSampleVideos(), source: 'sample', error: ytData.error.message });
+      }
+
+      if (!ytData.items || ytData.items.length === 0) {
+        return res.status(200).json({ success: true, data: getSampleVideos(), source: 'sample' });
+      }
+
+      // YouTube response → our format mein convert karo
+      const videos = ytData.items.map((item, idx) => {
+        const snippet = item.snippet;
+        const videoId = item.id.videoId;
+        return {
+          id: videoId,
+          title: snippet.title,
+          description: snippet.description?.substring(0, 120) || '',
+          youtube_id: videoId,
+          category: category,
+          crop: extractCropFromTitle(snippet.title),
+          duration: '',
+          thumbnail: snippet.thumbnails?.high?.url || snippet.thumbnails?.medium?.url || `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+          channel: snippet.channelTitle,
+          published: snippet.publishedAt,
+          views: 0,
+          likes: 0,
+        };
+      });
+
+      return res.status(200).json({ success: true, data: videos, source: 'youtube' });
+
+    } catch (err) {
+      console.error('YouTube fetch error:', err);
+      return res.status(200).json({ success: true, data: getSampleVideos(), source: 'sample' });
+    }
   }
 
-  // POST /api/community?type=video_view — view count badhao
+  // POST /api/community?type=video_view — view count (YouTube videos ke liye skip)
   if (type === 'video_view' && req.method === 'POST') {
-    const { video_id } = req.body || {};
-    if (!video_id) return res.status(400).json({ error: 'video_id zaroori hai' });
-
-    // Views increment karo (RPC ya manual fetch+update)
-    const getR = await fetch(`${url}/rest/v1/kisan_videos?id=eq.${video_id}`, { headers });
-    const videos = await getR.json();
-    if (Array.isArray(videos) && videos.length > 0) {
-      await fetch(`${url}/rest/v1/kisan_videos?id=eq.${video_id}`, {
-        method: 'PATCH', headers,
-        body: JSON.stringify({ views: (videos[0].views || 0) + 1 }),
-      });
-    }
     return res.status(200).json({ success: true });
   }
 
-  // GET /api/community?type=video_categories — categories list
+  // GET /api/community?type=video_categories
   if (type === 'video_categories' && req.method === 'GET') {
     return res.status(200).json({
       success: true,
       data: [
-        { id: 'all', label: 'Sab', emoji: '📚' },
-        { id: 'disease', label: 'Rog Ilaaj', emoji: '🔬' },
-        { id: 'fertilizer', label: 'Khad', emoji: '🌱' },
-        { id: 'irrigation', label: 'Sinchai', emoji: '💧' },
-        { id: 'harvest', label: 'Katai', emoji: '🌾' },
-        { id: 'organic', label: 'Organic', emoji: '🍃' },
-        { id: 'government', label: 'Sarkari', emoji: '🏛️' },
-        { id: 'market', label: 'Mandi', emoji: '📊' },
-        { id: 'weather', label: 'Mausam', emoji: '🌤️' },
-        { id: 'seeds', label: 'Beej', emoji: '🫘' },
+        { id: 'all',        label: 'Sab',      emoji: '📚' },
+        { id: 'disease',    label: 'Rog Ilaaj', emoji: '🔬' },
+        { id: 'fertilizer', label: 'Khad',      emoji: '🌱' },
+        { id: 'irrigation', label: 'Sinchai',   emoji: '💧' },
+        { id: 'harvest',    label: 'Katai',     emoji: '🌾' },
+        { id: 'organic',    label: 'Organic',   emoji: '🍃' },
+        { id: 'government', label: 'Sarkari',   emoji: '🏛️' },
+        { id: 'market',     label: 'Mandi',     emoji: '📊' },
+        { id: 'seeds',      label: 'Beej',      emoji: '🫘' },
+        { id: 'weather',    label: 'Mausam',    emoji: '🌤️' },
       ]
     });
   }
@@ -200,64 +200,63 @@ module.exports = async function handler(req, res) {
   return res.status(405).json({ error: 'Invalid type ya method' });
 };
 
-// ─── Sample Videos (jab DB empty ho) ─────────────────────────
+// ─── Crop name extract from YouTube title ─────────────────────
+function extractCropFromTitle(title) {
+  const CROP_MAP = {
+    'tamatar': 'Tamatar', 'tomato': 'Tamatar',
+    'gehun': 'Gehun', 'wheat': 'Gehun',
+    'dhaan': 'Dhaan', 'paddy': 'Dhaan', 'rice': 'Dhaan',
+    'aalu': 'Aalu', 'potato': 'Aalu',
+    'pyaaz': 'Pyaaz', 'onion': 'Pyaaz',
+    'makka': 'Makka', 'maize': 'Makka', 'corn': 'Makka',
+    'ganna': 'Ganna', 'sugarcane': 'Ganna',
+    'sarson': 'Sarson', 'mustard': 'Sarson',
+    'chana': 'Chana', 'chickpea': 'Chana',
+    'mirchi': 'Mirchi', 'chilli': 'Mirchi',
+    'arhar': 'Arhar', 'dal': 'Dal',
+  };
+  const lower = title.toLowerCase();
+  for (const [key, val] of Object.entries(CROP_MAP)) {
+    if (lower.includes(key)) return val;
+  }
+  return 'General';
+}
+
+// ─── Sample Videos fallback ───────────────────────────────────
 function getSampleVideos() {
   return [
     {
-      id: 1,
+      id: 'sample1',
       title: 'Tamatar mein pani kitna dein — Complete Guide',
       description: 'Tamatar ki fasal mein sahi irrigation technique — drip vs flood',
-      youtube_id: 'dQw4w9WgXcQ',
+      youtube_id: 'WKxAWDHKEpI',
       category: 'irrigation',
       crop: 'Tamatar',
-      duration: '4:32',
-      thumbnail: 'https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
-      uploaded_by: 'KisanAI',
+      thumbnail: 'https://img.youtube.com/vi/WKxAWDHKEpI/hqdefault.jpg',
+      channel: 'KisanAI',
       views: 1240,
-      likes: 89,
-      created_at: new Date().toISOString(),
     },
     {
-      id: 2,
+      id: 'sample2',
       title: 'Gehun mein DAP kab aur kitna daalein',
       description: 'Rabi season mein gehun ke liye fertilizer schedule',
-      youtube_id: 'dQw4w9WgXcQ',
+      youtube_id: 'XcwLOe7bUiE',
       category: 'fertilizer',
       crop: 'Gehun',
-      duration: '3:15',
-      thumbnail: 'https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
-      uploaded_by: 'KisanAI',
+      thumbnail: 'https://img.youtube.com/vi/XcwLOe7bUiE/hqdefault.jpg',
+      channel: 'KisanAI',
       views: 890,
-      likes: 67,
-      created_at: new Date().toISOString(),
     },
     {
-      id: 3,
-      title: 'PM Kisan Samman Nidhi — Form kaise bharein',
+      id: 'sample3',
+      title: 'PM Kisan Samman Nidhi — Form kaise bharein 2024',
       description: 'Step by step guide — PM Kisan registration aur payment status',
-      youtube_id: 'dQw4w9WgXcQ',
+      youtube_id: 'RgKAFK5djSk',
       category: 'government',
-      crop: 'all',
-      duration: '6:45',
-      thumbnail: 'https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
-      uploaded_by: 'KisanAI',
+      crop: 'General',
+      thumbnail: 'https://img.youtube.com/vi/RgKAFK5djSk/hqdefault.jpg',
+      channel: 'KisanAI',
       views: 3400,
-      likes: 210,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 4,
-      title: 'Neem spray ghar pe kaise banayein — Organic',
-      description: 'Zero cost organic pesticide — sirf neem patti se',
-      youtube_id: 'dQw4w9WgXcQ',
-      category: 'organic',
-      crop: 'all',
-      duration: '2:50',
-      thumbnail: 'https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
-      uploaded_by: 'KisanAI',
-      views: 2100,
-      likes: 156,
-      created_at: new Date().toISOString(),
     },
   ];
 }

@@ -130,6 +130,7 @@ module.exports = async function handler(req, res) {
         `&maxResults=20` +
         `&relevanceLanguage=hi` +
         `&regionCode=IN` +
+        `&videoEmbeddable=true` +
         `&videoDuration=medium` +
         `&key=${ytKey}`;
 

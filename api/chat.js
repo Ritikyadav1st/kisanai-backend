@@ -48,15 +48,13 @@ module.exports = async function handler(req, res) {
     const { audio_base64, language } = req.body || {};
     if (!audio_base64) return res.status(400).json({ error: 'audio_base64 required' });
     try {
-      // Convert base64 to Buffer
+      // Native Node.js 18 FormData + Blob (no external package needed)
       const audioBuffer = Buffer.from(audio_base64, 'base64');
-      // Create FormData for Whisper API
-      const { FormData, Blob } = await import('formdata-node');
       const form = new FormData();
-      form.set('file', new Blob([audioBuffer], {type:'audio/m4a'}), 'audio.m4a');
-      form.set('model', 'whisper-1');
-      form.set('language', language || 'hi');
-      form.set('response_format', 'text');
+      form.append('file', new Blob([audioBuffer], { type: 'audio/m4a' }), 'voice.m4a');
+      form.append('model', 'whisper-1');
+      form.append('language', language || 'hi');
+      form.append('response_format', 'text');
       const whisperRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiKey}` },
@@ -64,7 +62,9 @@ module.exports = async function handler(req, res) {
       });
       const text = await whisperRes.text();
       if (!whisperRes.ok) return res.status(502).json({ error: text });
-      return res.status(200).json({ success: true, text: text.trim() });
+      const trimmed = text.trim();
+      if (!trimmed) return res.status(200).json({ success: false, text: '' });
+      return res.status(200).json({ success: true, text: trimmed });
     } catch (err) {
       return res.status(500).json({ error: err.message });
     }

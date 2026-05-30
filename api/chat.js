@@ -58,8 +58,36 @@ module.exports = async function handler(req, res) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY missing' });
 
-  // ── Voice Transcription (Whisper) ────────────────────────────
+  // ── OpenAI TTS — Natural Male Voice ─────────────────────────
   const { type } = req.query;
+  if (type === 'tts') {
+    const { text, voice } = req.body || {};
+    if (!text) return res.status(400).json({ error: 'text required' });
+    try {
+      const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: 'tts-1',
+          input: text.substring(0, 1000),
+          voice: voice || 'onyx',   // onyx = deep natural male
+          response_format: 'mp3',
+          speed: 0.95,
+        }),
+      });
+      if (!ttsRes.ok) {
+        const err = await ttsRes.text();
+        return res.status(502).json({ error: err });
+      }
+      const audioBuffer = await ttsRes.arrayBuffer();
+      const base64 = Buffer.from(audioBuffer).toString('base64');
+      return res.status(200).json({ success: true, audio_base64: base64, format: 'mp3' });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── Voice Transcription (Whisper) ─────────────────────────
   if (type === 'transcribe') {
     const { audio_base64, language } = req.body || {};
     if (!audio_base64) return res.status(400).json({ error: 'audio_base64 required' });

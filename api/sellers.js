@@ -1,4 +1,4 @@
-// /api/sellers — Marketplace: listings GET/POST/DELETE + old sellers/products
+// /api/sellers — Kisan Marketplace: listings, photo upload, my listings
 
 function calcDistance(lat1, lng1, lat2, lng2) {
   const R = 6371;
@@ -15,12 +15,12 @@ function timeAgo(ts) {
   return `${Math.floor(mins/1440)} din pehle`;
 }
 
-const FALLBACK_LISTINGS = [
-  { id:'f1', farmer_id:'demo', farmer_name:'Ramesh Kumar', title:'Desi Gai — 2.5 saal, 8L dubh', category:'pashu', price:'38000', unit:'per gai', location:'Ghaziabad, UP', latitude:28.6692, longitude:77.4538, phone:'9876543210', description:'Healthy desi gai, koi bimari nahi, roz 8 litre milk.', is_active:true, created_at: new Date(Date.now()-3600000).toISOString() },
-  { id:'f2', farmer_id:'demo', farmer_name:'Suresh Yadav', title:'Gehun — Lok-1, 10 Quintal', category:'fasal', price:'2100', unit:'per quintal', location:'Meerut, UP', latitude:28.9845, longitude:77.7064, phone:'9812345678', description:'Saaf gehun, nayi fasal 2025, no moisture.', is_active:true, created_at: new Date(Date.now()-86400000).toISOString() },
-  { id:'f3', farmer_id:'demo', farmer_name:'AgriShop Hapur', title:'DAP Khad — 5 bags original', category:'khad', price:'1350', unit:'per bag', location:'Hapur, UP', latitude:28.7295, longitude:77.7754, phone:'9911223344', description:'Original IFFCO DAP, sealed bags, fresh stock.', is_active:true, created_at: new Date(Date.now()-7200000).toISOString() },
-  { id:'f4', farmer_id:'demo', farmer_name:'Mohan Lal', title:'Bhusa — 50 Quintal dry', category:'bhusa', price:'800', unit:'per quintal', location:'Ghaziabad, UP', latitude:28.6450, longitude:77.4250, phone:'9988776655', description:'Dry clean bhusa, bagged ready.', is_active:true, created_at: new Date(Date.now()-172800000).toISOString() },
-  { id:'f5', farmer_id:'demo', farmer_name:'Kiran Devi', title:'Tamatar — 5 crate fresh', category:'fasal', price:'600', unit:'per crate', location:'Noida, UP', latitude:28.5355, longitude:77.3910, phone:'9876501234', description:'Fresh tamatar, kal hi toda, direct khet se.', is_active:true, created_at: new Date(Date.now()-1800000).toISOString() },
+const FALLBACK = [
+  { id:'f1', farmer_id:'demo', farmer_name:'Ramesh Kumar', title:'Desi Gai — 2.5 saal, 8L dubh', category:'pashu', price:'38000', unit:'per gai', location:'Ghaziabad, UP', latitude:28.6692, longitude:77.4538, phone:'9876543210', description:'Healthy desi gai, koi bimari nahi, roz 8 litre milk.', image_url:null, is_active:true, created_at: new Date(Date.now()-3600000).toISOString() },
+  { id:'f2', farmer_id:'demo', farmer_name:'Suresh Yadav', title:'Gehun — Lok-1, 10 Quintal', category:'fasal', price:'2100', unit:'per quintal', location:'Meerut, UP', latitude:28.9845, longitude:77.7064, phone:'9812345678', description:'Saaf gehun, nayi fasal 2025, no moisture.', image_url:null, is_active:true, created_at: new Date(Date.now()-86400000).toISOString() },
+  { id:'f3', farmer_id:'demo', farmer_name:'AgriShop Hapur', title:'DAP Khad — 5 bags original', category:'khad', price:'1350', unit:'per bag', location:'Hapur, UP', latitude:28.7295, longitude:77.7754, phone:'9911223344', description:'Original IFFCO DAP, sealed bags, fresh stock.', image_url:null, is_active:true, created_at: new Date(Date.now()-7200000).toISOString() },
+  { id:'f4', farmer_id:'demo', farmer_name:'Mohan Lal', title:'Bhusa — 50 Quintal dry', category:'bhusa', price:'800', unit:'per quintal', location:'Ghaziabad, UP', latitude:28.6450, longitude:77.4250, phone:'9988776655', description:'Dry clean bhusa, bagged ready.', image_url:null, is_active:true, created_at: new Date(Date.now()-172800000).toISOString() },
+  { id:'f5', farmer_id:'demo', farmer_name:'Kiran Devi', title:'Tamatar — 5 crate fresh', category:'fasal', price:'600', unit:'per crate', location:'Noida, UP', latitude:28.5355, longitude:77.3910, phone:'9876501234', description:'Fresh tamatar, kal hi toda, direct khet se.', image_url:null, is_active:true, created_at: new Date(Date.now()-1800000).toISOString() },
 ];
 
 module.exports = async function handler(req, res) {
@@ -31,7 +31,7 @@ module.exports = async function handler(req, res) {
 
   const supaUrl = process.env.SUPABASE_URL;
   const supaKey = process.env.SUPABASE_ANON_KEY;
-  const headers = supaUrl && supaKey ? {
+  const dbHeaders = supaUrl && supaKey ? {
     'apikey': supaKey,
     'Authorization': `Bearer ${supaKey}`,
     'Content-Type': 'application/json',
@@ -40,71 +40,106 @@ module.exports = async function handler(req, res) {
 
   const { type } = req.query;
 
-  // ── GET listings ─────────────────────────────────────────────
+  // ── Upload image to Supabase Storage ────────────────────────
+  if (type === 'upload_image' && req.method === 'POST') {
+    const { image_base64, mime_type } = req.body || {};
+    if (!image_base64) return res.status(400).json({ error: 'image_base64 required' });
+    if (!dbHeaders) return res.status(500).json({ error: 'Supabase not configured' });
+    try {
+      const ext = (mime_type || 'image/jpeg').includes('png') ? 'png' : 'jpg';
+      const filename = `listing_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+      const imgBuffer = Buffer.from(image_base64, 'base64');
+      const uploadRes = await fetch(
+        `${supaUrl}/storage/v1/object/kisan-marketplace/${filename}`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': supaKey,
+            'Authorization': `Bearer ${supaKey}`,
+            'Content-Type': mime_type || 'image/jpeg',
+            'x-upsert': 'true',
+          },
+          body: imgBuffer,
+        }
+      );
+      if (!uploadRes.ok) {
+        const err = await uploadRes.text();
+        return res.status(500).json({ error: 'Upload failed: ' + err });
+      }
+      const imageUrl = `${supaUrl}/storage/v1/object/public/kisan-marketplace/${filename}`;
+      return res.status(200).json({ success: true, image_url: imageUrl });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  // ── GET all listings ─────────────────────────────────────────
   if ((!type || type === 'listings') && req.method === 'GET') {
     const { lat, lng, distance, category } = req.query;
     const userLat = parseFloat(lat);
     const userLng = parseFloat(lng);
     const maxKm = parseFloat(distance) || null;
-
-    let listings = FALLBACK_LISTINGS;
-
-    if (headers) {
+    let listings = FALLBACK;
+    if (dbHeaders) {
       try {
-        let url = `${supaUrl}/rest/v1/marketplace_listings?is_active=eq.true&order=created_at.desc&limit=50`;
+        let url = `${supaUrl}/rest/v1/marketplace_listings?is_active=eq.true&order=created_at.desc&limit=60`;
         if (category && category !== 'all') url += `&category=eq.${category}`;
-        const r = await fetch(url, { headers });
+        const r = await fetch(url, { headers: dbHeaders });
         const data = await r.json();
         if (Array.isArray(data) && data.length > 0) listings = data;
       } catch {}
     }
-
-    // Attach distance
     let result = listings.map(l => ({
       ...l,
       distance: (userLat && userLng && l.latitude && l.longitude)
-        ? calcDistance(userLat, userLng, l.latitude, l.longitude)
-        : null,
+        ? calcDistance(userLat, userLng, l.latitude, l.longitude) : null,
       time_ago: timeAgo(l.created_at),
     }));
-
-    // Filter by distance
     if (maxKm && userLat && userLng) {
       result = result.filter(l => l.distance !== null && l.distance <= maxKm);
     }
-
-    // Sort: nearest first, then newest
     result.sort((a, b) => {
       if (a.distance !== null && b.distance !== null) return a.distance - b.distance;
       if (a.distance !== null) return -1;
       if (b.distance !== null) return 1;
       return new Date(b.created_at) - new Date(a.created_at);
     });
-
     return res.status(200).json({ success: true, data: result });
+  }
+
+  // ── GET my listings ──────────────────────────────────────────
+  if (type === 'my_listings' && req.method === 'GET') {
+    const { farmer_id } = req.query;
+    if (!farmer_id) return res.status(400).json({ error: 'farmer_id required' });
+    if (!dbHeaders) return res.status(200).json({ success: true, data: [] });
+    try {
+      const r = await fetch(
+        `${supaUrl}/rest/v1/marketplace_listings?farmer_id=eq.${farmer_id}&order=created_at.desc`,
+        { headers: dbHeaders }
+      );
+      const data = await r.json();
+      const result = Array.isArray(data) ? data.map(l => ({ ...l, time_ago: timeAgo(l.created_at) })) : [];
+      return res.status(200).json({ success: true, data: result });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
   }
 
   // ── POST new listing ─────────────────────────────────────────
   if (type === 'listing' && req.method === 'POST') {
-    const { farmer_id, farmer_name, title, category, price, unit, location, latitude, longitude, phone, description } = req.body || {};
+    const { farmer_id, farmer_name, title, category, price, unit, location, latitude, longitude, phone, description, image_url } = req.body || {};
     if (!title || !phone) return res.status(400).json({ error: 'Title aur phone zaroori hai' });
-
     const listing = {
-      farmer_id: farmer_id || 'anon',
-      farmer_name: farmer_name || 'Kisan Ji',
-      title, category: category || 'other',
-      price: price || '', unit: unit || '',
+      farmer_id: farmer_id || 'anon', farmer_name: farmer_name || 'Kisan Ji',
+      title, category: category || 'other', price: price || '', unit: unit || '',
       location: location || '', latitude: latitude || null, longitude: longitude || null,
-      phone, description: description || '',
-      is_active: true,
-      created_at: new Date().toISOString(),
+      phone, description: description || '', image_url: image_url || null,
+      is_active: true, created_at: new Date().toISOString(),
     };
-
-    if (headers) {
+    if (dbHeaders) {
       try {
         const r = await fetch(`${supaUrl}/rest/v1/marketplace_listings`, {
-          method: 'POST', headers,
-          body: JSON.stringify(listing),
+          method: 'POST', headers: dbHeaders, body: JSON.stringify(listing),
         });
         const data = await r.json();
         return res.status(200).json({ success: true, data: Array.isArray(data) ? data[0] : data });
@@ -118,10 +153,12 @@ module.exports = async function handler(req, res) {
   // ── DELETE listing ───────────────────────────────────────────
   if (type === 'listing' && req.method === 'DELETE') {
     const { id } = req.query;
-    if (!id) return res.status(400).json({ error: 'id zaroori hai' });
-    if (headers) {
+    if (!id) return res.status(400).json({ error: 'id required' });
+    if (dbHeaders) {
       try {
-        await fetch(`${supaUrl}/rest/v1/marketplace_listings?id=eq.${id}`, { method: 'DELETE', headers });
+        await fetch(`${supaUrl}/rest/v1/marketplace_listings?id=eq.${id}`, {
+          method: 'DELETE', headers: dbHeaders,
+        });
       } catch {}
     }
     return res.status(200).json({ success: true });
